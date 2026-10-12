@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>World Time Zone Meeting Planner</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-4">
+<div class="max-w-5xl mx-auto">
+  <h1 class="text-2xl font-bold text-sky-400 mb-1">World Time Zone Meeting Planner</h1>
+  <p class="text-slate-400 text-sm mb-5">Add up to 8 cities and find overlapping business hours.</p>
+
+  <!-- Add city -->
+  <div class="flex gap-3 mb-5">
+    <div class="flex-1">
+      <label for="citySelect" class="sr-only">Select a city</label>
+      <select id="citySelect" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-400">
+        <option value="">— Select a city —</option>
+      </select>
+    </div>
+    <button onclick="addCity()" class="bg-sky-500 hover:bg-sky-400 text-white font-semibold px-4 py-2 rounded-lg text-sm transition">Add City</button>
+  </div>
+
+  <div id="addErr" class="text-red-400 text-xs mb-3 hidden"></div>
+
+  <!-- Active cities -->
+  <div id="cityList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
+
+  <!-- 24h Timeline -->
+  <div id="timelineSection" class="hidden">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-base font-semibold text-slate-200">Business Hours Overlap (click a slot to see all local times)</h2>
+      <div class="text-xs text-slate-400">Green = business hours (09:00–18:00)</div>
+    </div>
+    <div class="overflow-x-auto">
+      <div id="timeline" class="min-w-max"></div>
+    </div>
+    <div id="slotDetail" class="mt-4 bg-slate-800 border border-slate-700 rounded-xl p-4 hidden">
+      <h3 class="font-semibold text-sky-300 mb-2" id="slotTitle"></h3>
+      <div id="slotTimes" class="grid grid-cols-2 gap-2 text-sm"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CITIES = [
+  {name:'Tokyo',       tz:'Asia/Tokyo',         utcOffset:9},
+  {name:'Seoul',       tz:'Asia/Seoul',          utcOffset:9},
+  {name:'Beijing',     tz:'Asia/Shanghai',       utcOffset:8},
+  {name:'Shanghai',    tz:'Asia/Shanghai',       utcOffset:8},
+  {name:'Hong Kong',   tz:'Asia/Hong_Kong',      utcOffset:8},
+  {name:'Singapore',   tz:'Asia/Singapore',      utcOffset:8},
+  {name:'Jakarta',     tz:'Asia/Jakarta',        utcOffset:7},
+  {name:'Bangkok',     tz:'Asia/Bangkok',        utcOffset:7},
+  {name:'Mumbai',      tz:'Asia/Kolkata',        utcOffset:5.5},
+  {name:'Dubai',       tz:'Asia/Dubai',          utcOffset:4},
+  {name:'Moscow',      tz:'Europe/Moscow',       utcOffset:3},
+  {name:'Nairobi',     tz:'Africa/Nairobi',      utcOffset:3},
+  {name:'Istanbul',    tz:'Europe/Istanbul',     utcOffset:3},
+  {name:'Cairo',       tz:'Africa/Cairo',        utcOffset:2},
+  {name:'Johannesburg',tz:'Africa/Johannesburg', utcOffset:2},
+  {name:'Paris',       tz:'Europe/Paris',        utcOffset:1},
+  {name:'Berlin',      tz:'Europe/Berlin',       utcOffset:1},
+  {name:'Rome',        tz:'Europe/Rome',         utcOffset:1},
+  {name:'Amsterdam',   tz:'Europe/Amsterdam',    utcOffset:1},
+  {name:'London',      tz:'Europe/London',       utcOffset:0},
+  {name:'Lisbon',      tz:'Europe/Lisbon',       utcOffset:0},
+  {name:'Reykjavik',   tz:'Atlantic/Reykjavik',  utcOffset:0},
+  {name:'Sao Paulo',   tz:'America/Sao_Paulo',   utcOffset:-3},
+  {name:'Buenos Aires',tz:'America/Argentina/Buenos_Aires', utcOffset:-3},
+  {name:'New York',    tz:'America/New_York',    utcOffset:-5},
+  {name:'Toronto',     tz:'America/Toronto',     utcOffset:-5},
+  {name:'Chicago',     tz:'America/Chicago',     utcOffset:-6},
+  {name:'Mexico City', tz:'America/Mexico_City', utcOffset:-6},
+  {name:'Denver',      tz:'America/Denver',      utcOffset:-7},
+  {name:'Phoenix',     tz:'America/Phoenix',     utcOffset:-7},
+  {name:'Los Angeles', tz:'America/Los_Angeles', utcOffset:-8},
+  {name:'Seattle',     tz:'America/Los_Angeles', utcOffset:-8},
+  {name:'Vancouver',   tz:'America/Vancouver',   utcOffset:-8},
+  {name:'Anchorage',   tz:'America/Anchorage',   utcOffset:-9},
+  {name:'Honolulu',    tz:'Pacific/Honolulu',    utcOffset:-10},
+  {name:'Auckland',    tz:'Pacific/Auckland',    utcOffset:12},
+  {name:'Sydney',      tz:'Australia/Sydney',    utcOffset:10},
+  {name:'Melbourne',   tz:'Australia/Melbourne', utcOffset:10},
+  {name:'Brisbane',    tz:'Australia/Brisbane',  utcOffset:10},
+  {name:'Perth',       tz:'Australia/Perth',     utcOffset:8},
+];
+
+let selectedCities = [];
+let clockInterval = null;
+
+function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function populateSelect() {
+  const sel = document.getElementById('citySelect');
+  CITIES.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.name;
+    opt.textContent = `${c.name} (UTC${c.utcOffset >= 0 ? '+' : ''}${c.utcOffset})`;
+    sel.appendChild(opt);
+  });
+}
+
+function getLocalTime(city) {
+  const now = new Date();
+  // Use Intl for accuracy when available
+  try {
+    return new Date(now.toLocaleString('en-US', {timeZone: city.tz}));
+  } catch {
+    const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
+    return new Date(utcMs + city.utcOffset * 3600000);
+  }
+}
+
+function formatTime(d) {
+  return d.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:false});
+}
+
+function addCity() {
+  const sel = document.getElementById('citySelect');
+  const name = sel.value;
+  const err = document.getElementById('addErr');
+  if (!name) { err.textContent = 'Please select a city.'; err.classList.remove('hidden'); return; }
+  if (selectedCities.find(c => c.name === name)) { err.textContent = 'City already added.'; err.classList.remove('hidden'); return; }
+  if (selectedCities.length >= 8) { err.textContent = 'Maximum 8 cities.'; err.classList.remove('hidden'); return; }
+  err.classList.add('hidden');
+  const city = CITIES.find(c => c.name === name);
+  selectedCities.push(city);
+  sel.value = '';
+  render();
+}
+
+function removeCity(name) {
+  selectedCities = selectedCities.filter(c => c.name !== name);
+  render();
+}
+
+const COLORS = ['bg-sky-500','bg-violet-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500','bg-orange-500','bg-teal-500'];
+
+function render() {
+  const list = document.getElementById('cityList');
+  list.innerHTML = '';
+  selectedCities.forEach((city, i) => {
+    const localTime = getLocalTime(city);
+    const card = document.createElement('div');
+    card.className = 'bg-slate-800 border border-slate-700 rounded-xl p-4 relative';
+    card.innerHTML = `
+      <button onclick="removeCity('${escapeHtml(city.name)}')" class="absolute top-2 right-2 text-slate-500 hover:text-red-400 text-lg leading-none" aria-label="Remove ${escapeHtml(city.name)}">×</button>
+      <div class="flex items-center gap-2 mb-2">
+        <span class="w-3 h-3 rounded-full ${COLORS[i % COLORS.length]}"></span>
+        <span class="font-semibold text-sm">${escapeHtml(city.name)}</span>
+      </div>
+      <div class="text-3xl font-bold tabular-nums" id="clock_${escapeHtml(city.name).replace(/\s/g,'_')}">${formatTime(localTime)}</div>
+      <div class="text-xs text-slate-400 mt-1">UTC${city.utcOffset >= 0 ? '+' : ''}${city.utcOffset}</div>
+    `;
+    list.appendChild(card);
+  });
+
+  clearInterval(clockInterval);
+  if (selectedCities.length > 0) {
+    clockInterval = setInterval(updateClocks, 1000);
+    renderTimeline();
+    document.getElementById('timelineSection').classList.remove('hidden');
+  } else {
+    document.getElementById('timelineSection').classList.add('hidden');
+  }
+}
+
+function updateClocks() {
+  selectedCities.forEach(city => {
+    const el = document.getElementById('clock_' + city.name.replace(/\s/g,'_'));
+    if (el) el.textContent = formatTime(getLocalTime(city));
+  });
+}
+
+function renderTimeline(highlightHour = null) {
+  const timeline = document.getElementById('timeline');
+  timeline.innerHTML = '';
+  const HOURS = 24;
+  const CELL_W = 28;
+
+  // Header row (UTC hours)
+  const headerRow = document.createElement('div');
+  headerRow.className = 'flex';
+  const labelCell = document.createElement('div');
+  labelCell.style.width = '120px';
+  labelCell.className = 'shrink-0 text-xs text-slate-500 py-1 pr-2 text-right';
+  labelCell.textContent = 'UTC →';
+  headerRow.appendChild(labelCell);
+  for (let h = 0; h < HOURS; h++) {
+    const c = document.createElement('div');
+    c.style.width = CELL_W + 'px';
+    c.className = 'shrink-0 text-center text-xs text-slate-500 py-1';
+    c.textContent = h % 3 === 0 ? String(h).padStart(2,'0') : '';
+    headerRow.appendChild(c);
+  }
+  timeline.appendChild(headerRow);
+
+  // City rows
+  selectedCities.forEach((city, ci) => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center mb-1';
+
+    const label = document.createElement('div');
+    label.style.width = '120px';
+    label.className = 'shrink-0 text-xs text-slate-300 pr-2 text-right truncate';
+    label.textContent = city.name;
+    row.appendChild(label);
+
+    for (let utcH = 0; utcH < HOURS; utcH++) {
+      // Local hour for this UTC slot
+      let localH = ((utcH + city.utcOffset) % 24 + 24) % 24;
+      const isBiz = localH >= 9 && localH < 18;
+      const isHighlight = highlightHour === utcH;
+
+      const cell = document.createElement('div');
+      cell.style.width = CELL_W + 'px';
+      cell.style.height = '28px';
+      cell.className = 'shrink-0 cursor-pointer transition rounded-sm mx-px ' +
+        (isHighlight ? 'ring-2 ring-sky-400 ' : '') +
+        (isBiz ? (COLORS[ci % COLORS.length].replace('bg-','bg-') + '/70') : 'bg-slate-700/30');
+      if (!isBiz) cell.className = 'shrink-0 cursor-pointer transition rounded-sm mx-px bg-slate-700/30 ' + (isHighlight ? 'ring-2 ring-sky-400' : '');
+      else cell.className = `shrink-0 cursor-pointer transition rounded-sm mx-px ${COLORS[ci % COLORS.length]} opacity-70 ${isHighlight ? 'ring-2 ring-sky-400 opacity-100' : ''}`;
+
+      cell.setAttribute('aria-label', `UTC ${utcH}:00 — ${city.name} local ${String(Math.floor(localH)).padStart(2,'0')}:00`);
+      cell.addEventListener('click', () => showSlotDetail(utcH));
+      row.appendChild(cell);
+    }
+    timeline.appendChild(row);
+  });
+
+  // Overlap row
+  if (selectedCities.length > 1) {
+    const overlapRow = document.createElement('div');
+    overlapRow.className = 'flex items-center mt-2';
+    const ol = document.createElement('div');
+    ol.style.width = '120px';
+    ol.className = 'shrink-0 text-xs text-slate-400 pr-2 text-right font-semibold';
+    ol.textContent = 'Overlap';
+    overlapRow.appendChild(ol);
+    for (let utcH = 0; utcH < HOURS; utcH++) {
+      const allBiz = selectedCities.every(city => {
+        const lh = ((utcH + city.utcOffset) % 24 + 24) % 24;
+        return lh >= 9 && lh < 18;
+      });
+      const isHighlight = highlightHour === utcH;
+      const cell = document.createElement('div');
+      cell.style.width = CELL_W + 'px';
+      cell.style.height = '14px';
+      cell.className = `shrink-0 cursor-pointer rounded-sm mx-px ${allBiz ? 'bg-green-400' : 'bg-slate-800'} ${isHighlight ? 'ring-2 ring-sky-400' : ''}`;
+      cell.setAttribute('aria-label', `UTC ${utcH}:00 overlap: ${allBiz ? 'yes' : 'no'}`);
+      cell.addEventListener('click', () => showSlotDetail(utcH));
+      overlapRow.appendChild(cell);
+    }
+    timeline.appendChild(overlapRow);
+  }
+}
+
+function showSlotDetail(utcH) {
+  renderTimeline(utcH);
+  const detail = document.getElementById('slotDetail');
+  detail.classList.remove('hidden');
+  document.getElementById('slotTitle').textContent = `UTC ${String(utcH).padStart(2,'0')}:00`;
+  const timesEl = document.getElementById('slotTimes');
+  timesEl.innerHTML = '';
+  selectedCities.forEach(city => {
+    const lh = ((utcH + city.utcOffset) % 24 + 24) % 24;
+    const isBiz = lh >= 9 && lh < 18;
+    const div = document.createElement('div');
+    div.className = 'flex justify-between items-center bg-slate-700/50 rounded px-3 py-1.5';
+    div.innerHTML = `<span class="font-medium">${escapeHtml(city.name)}</span>
+      <span class="${isBiz ? 'text-green-400 font-bold' : 'text-slate-400'}">${String(Math.floor(lh)).padStart(2,'0')}:00${isBiz ? ' ✓' : ''}</span>`;
+    timesEl.appendChild(div);
+  });
+}
+
+populateSelect();
+render();
+</script>
+</body>
+</html>
